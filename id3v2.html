@@ -1,0 +1,205 @@
+<html>
+<head>
+<title>ID3v2 Tag Reader</title>
+<style type="text/css">
+input.text_frame { width: 500px; }
+.top { vertical-align: top; }
+</style>
+</head>
+<body>
+<div><strong>Select an mp3 file to read info from.</strong></div>
+<div>&nbsp;</div>
+<input type="file" id="theFile"/>
+<div>&nbsp;</div>
+<table>
+  <tr><td class="top"><strong>Artist:</strong></td><td><input type="text" class="text_frame" data-id="TPE1"/></td></tr>
+  <tr><td class="top"><strong>Title:</strong></td><td><input type="text" class="text_frame" data-id="TIT2"/></td></tr>
+  <tr><td class="top"><strong>Album:</strong></td><td><input type="text" class="text_frame" data-id="TALB"/></td></tr>
+  <tr><td class="top"><strong>Genre:</strong></td><td><input type="text" class="text_frame" data-id="TCON"/></td></tr>
+  <tr><td class="top"><strong>Picture:</strong></td><td><img id="APIC" style="max-width: 250px;"/></td></tr>
+</table>
+
+<script src="jquery.min.js"></script>
+<script type="text/javascript">
+var reader = null;
+
+var readASCIIString = function(dv, offset, maxLength) {
+  var index = offset;
+  var str = "";
+  while (maxLength--) {
+    var keyCode = dv.getUint8(index++);
+    if (keyCode == 0) {
+      break;
+    }
+    str += String.fromCharCode(keyCode);
+  }
+  return str;
+}
+
+var populateUTFTest = function() {
+  window.UTFtest = new ArrayBuffer(12);
+  var dv = new DataView(window.UTFtest);
+  dv.setUint8(0, 254);
+  dv.setUint8(1, 255);
+  dv.setUint8(2, 216);
+  dv.setUint8(3, 8);
+  dv.setUint8(4, 223);
+  dv.setUint8(5, 69);
+  dv.setUint8(6, 0);
+  dv.setUint8(7, 61);
+  dv.setUint8(8, 0);
+  dv.setUint8(9, 82);
+  dv.setUint8(10, 0);
+  dv.setUint8(11, 97);
+};
+
+var readUTF16String = function(dv, offset, maxLength) {
+  var index = offset;
+  var str = "";
+  var endianFlag = false;
+  var w1 = dv.getUint16(index);
+  if (w1 == 0xfffe) {
+    //little endian BOM
+    endianFlag = true;
+    index += 2;
+    maxLength -= 2;
+    w1 = (index + 2) <= dv.byteLength ? dv.getUint16(index, endianFlag) : 0;
+  } else if (w1 == 0xfeff) {
+    index += 2;
+    maxLength -= 2;
+    w1 = (index + 2) <= dv.byteLength ? dv.getUint16(index, endianFlag) : 0;
+  }
+  // w1 now equal to first 16-bit after BOM if present.
+  
+
+  while (maxLength > 0) {
+    if (w1 == 0) {
+      maxLength -= 2;
+      break;
+    } else if (w1 < 0xd800 || w1 > 0xdfff) {
+      //16-bit, get keyCode, concat string continue
+      str += String.fromCharCode(w1);
+      index += 2;
+      maxLength -= 2;
+      w1 = (index + 2) <= dv.byteLength ? dv.getUint16(index, endianFlag) : 0;
+      continue;
+    } else if (0xd800 <= w1 && w1 <= 0xdbff) {
+      //surrogate pair
+      var w2 = dv.getUint16(index + 2, endianFlag);
+      if (!(0xdc00 <= w2 && w2 <= 0xdfff)) {
+        console.log("Invalid w2 in stream, failing.");
+        break;
+      }
+      var u = (w1 & 0x3ff) << 10 | (w2 & 0x3ff);
+      u += 0x10000;
+      str += String.fromCharCode(u);
+      index += 4;
+      maxLength -= 4;
+
+      w1 = (index + 2) < dv.byteLength ? dv.getUint16(index, endianFlag) : 0;
+
+    } else {
+      console.log("Invalid UTF-16 stream");
+      break;
+    }
+  }
+  return str;
+}
+
+
+var readSyncSafe = function(dv, offset) {
+  var sync = dv.getUint32(offset);
+  return (sync & 0x7f) | (sync & 0x7f00) >> 1 | (sync & 0x7f0000) >> 2 | (sync & 0x7f000000) >> 3;
+};
+
+var processFrame = function(majorVersion, dv, offset) {
+  var frame = {offset: offset + 10};
+  if (dv.byteLength <= offset || dv.getUint8(offset) == 0) {
+    //must have reached padding.  No more frames.
+    frame.isPadding = true;
+    return frame;
+  }
+  frame.ID = String.fromCharCode(dv.getUint8(offset)) +
+String.fromCharCode(dv.getUint8(offset+1)) +
+             String.fromCharCode(dv.getUint8(offset+2)) +
+String.fromCharCode(dv.getUint8(offset+3));
+  frame.size = majorVersion == 4 ? readSyncSafe(dv, offset+4) : dv.getUint32(offset+4);
+  frame.flags = [dv.getUint8(offset+8), dv.getUint8(offset+9)];
+  return frame;
+};
+
+var processID3v2 = function(ab) {
+  var dv = new DataView(ab);
+  if (dv.getUint8(0) != 73 || dv.getUint8(1) != 68 || dv.getUint8(2) != 51) {
+    alert("No ID3v2 tag present.");
+    return false;
+  }
+  var majorVersion = dv.getUint8(3);
+  var minorVersion = dv.getUint8(4);
+  var id3_flags = dv.getUint8(5);
+  var id3_size = readSyncSafe(dv, 6);
+  window.id3_frames = [];
+  var index = 10;
+  while (id3_size) {
+    var frame = processFrame(majorVersion, dv, index);
+    if (typeof frame.isPadding != undefined && frame.isPadding) {
+      frame.size = id3_size;
+      id3_size -= id3_size;
+      index += frame.size;
+
+    } else {
+      id3_size -= frame.size + 10;
+      index += frame.size + 10;
+    }
+    id3_frames.push(frame);
+  }
+  window.id3_frames = id3_frames;
+  var hasPic = false;
+  for(var i = 0; i < id3_frames.length; i++) {
+    if (id3_frames[i].ID && id3_frames[i].ID.charCodeAt(0) == 84 && id3_frames[i].ID != "TXXX") {
+      var str = dv.getUint8(id3_frames[i].offset) == 1 ? readUTF16String(dv, id3_frames[i].offset + 1, id3_frames[i].size - 1) : readASCIIString(dv, id3_frames[i].offset + 1, id3_frames[i].size - 1);
+      if ($(".text_frame[data-id=" + id3_frames[i].ID + "]").length) {
+        $(".text_frame[data-id=" + id3_frames[i].ID + "]").val(str);
+      }
+    } else if (id3_frames[i].ID == "APIC") {
+      var index = id3_frames[i].offset;
+      index += 1;
+      var mimeType = readASCIIString(dv, index, 50);
+      index += mimeType.length + 1;
+      //console.log("Picture type: " + dv.getUint8(index));
+      index += 1;
+      var descr = dv.getUint8(id3_frames[i].offset) == 1 ? readUTF16String(dv, index, 50) : readASCIIString(dv, index, 50);
+      index += descr.length + 1;
+      //index start of image data.
+      var sz = id3_frames[i].size - (index - id3_frames[i].offset);
+      //console.log("Size: " + sz);
+      var newBlob = new Blob([reader.result], {type: $("#theFile")[0].files[0].type});
+      var ab = newBlob.slice(index, index + sz);
+      var b = new Blob([ab], {type: mimeType});
+      var bUrl = URL.createObjectURL(b);
+      $("#APIC").attr('src', bUrl);
+      $("#APIC").show();
+      hasPic = true;
+
+    }
+  }
+  if (!hasPic) {
+    $("#APIC").hide();
+  }
+};
+
+$(document).ready(function() {
+  console.log("Ready");
+  $("#theFile").change(function(e) {
+    var theFile = $(this)[0].files[0];
+    console.log(theFile);
+    reader = new FileReader();
+    reader.readAsArrayBuffer(theFile);
+    reader.onloadend = function() {
+      processID3v2(reader.result);
+    };
+  });
+});
+</script>
+</body>
+</html>
