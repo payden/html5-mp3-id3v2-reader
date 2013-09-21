@@ -9,7 +9,7 @@ input.text_frame { width: 500px; }
 <body>
 <div><strong>Select an mp3 file to read info from.</strong></div>
 <div>&nbsp;</div>
-<input type="file" id="theFile"/>
+<input type="file" id="theFile"/>&nbsp;&nbsp;
 <div>&nbsp;</div>
 <table>
   <tr><td class="top"><strong>Artist:</strong></td><td><input type="text" class="text_frame" data-id="TPE1"/></td></tr>
@@ -90,9 +90,7 @@ var readUTF16String = function(dv, offset, maxLength) {
         console.log("Invalid w2 in stream, failing.");
         break;
       }
-      var u = (w1 & 0x3ff) << 10 | (w2 & 0x3ff);
-      u += 0x10000;
-      str += String.fromCharCode(u);
+      str += String.fromCharCode(w1) + String.fromCharCode(w2);
       index += 4;
       maxLength -= 4;
 
@@ -112,6 +110,59 @@ var readSyncSafe = function(dv, offset) {
   return (sync & 0x7f) | (sync & 0x7f00) >> 1 | (sync & 0x7f0000) >> 2 | (sync & 0x7f000000) >> 3;
 };
 
+/*
+This was kind of a bitch to think about until I wrote the diagram out.
+xxxxabcd efghijkl mnopqrst uvwxyzab
+xabcdefg xhijklmn xopqrstu xvwxyzab
+(n & 0x0fe00000) << 3 | (n & 0x1fc000) << 2 | (n & 0x3f80) << 1 | (n & 0x7f)
+*/
+var getSyncSafe = function(n) {
+  return (n & 0x0fe00000) << 3 | (n & 0x1fc000) << 2 | (n & 0x3f80) << 1 | (n & 0x7f);
+};
+
+var getLengthInBytes = function(str) {
+  var b = str.match(/[^\x00-\xff]/g);
+  return (str.length + (!b ? 0: b.length)); 
+};
+
+var updateTextFrame = function(frame, text) {
+  var needsUTF = false;
+  for (var i = 0; i < text.length; i++) {
+    if (text[i].charCodeAt(0) > 0x7f) {
+      needsUTF = true;
+      break;
+    }
+  }
+
+  if (needsUTF) {
+    var bytesNeeded = getLengthInBytes(text);
+    var ab = new ArrayBuffer(bytesNeeded + 3); //need initial byte indicating text encoding + BOM
+    var dv = new DataView(ab);
+    
+    
+    dv.setUint8(0, 1);
+    dv.setUint16(1, 0xfffe);
+    for (var i = 0; i < text.length; i += 2) {
+      console.log("Setting uint16 to : " + text[i].charCodeAt(0));
+      dv.setUint16(i+3, text[i].charCodeAt(0));
+    }
+    frame.arrayBuffer = ab;
+    frame.size = ab.byteLength;
+    return frame;
+  } else {
+    var ab = new ArrayBuffer(text.length + 1); //need initial text encoding byte
+    var dv = new DataView(ab);
+    dv.setUint8(0, 0);
+    for (var i = 0; i < text.length; i++) {
+      dv.setUint8(i+1, text[i].charCodeAt(0));
+    }
+    frame.arrayBuffer = ab;
+    frame.size = ab.byteLength;
+    return frame;
+  }
+}; 
+    
+
 var processFrame = function(majorVersion, dv, offset) {
   var frame = {offset: offset + 10};
   if (dv.byteLength <= offset || dv.getUint8(offset) == 0) {
@@ -119,12 +170,16 @@ var processFrame = function(majorVersion, dv, offset) {
     frame.isPadding = true;
     return frame;
   }
-  frame.ID = String.fromCharCode(dv.getUint8(offset)) +
-String.fromCharCode(dv.getUint8(offset+1)) +
-             String.fromCharCode(dv.getUint8(offset+2)) +
-String.fromCharCode(dv.getUint8(offset+3));
+  var fr = new FileReader();
+  frame.ID = String.fromCharCode(dv.getUint8(offset)) + String.fromCharCode(dv.getUint8(offset+1)) +
+             String.fromCharCode(dv.getUint8(offset+2)) + String.fromCharCode(dv.getUint8(offset+3));
   frame.size = majorVersion == 4 ? readSyncSafe(dv, offset+4) : dv.getUint32(offset+4);
   frame.flags = [dv.getUint8(offset+8), dv.getUint8(offset+9)];
+  fr.onloadend = function(e) {
+    frame.arrayBuffer = e.target.result;
+  };
+  fr.readAsArrayBuffer(new Blob([dv.buffer.slice(frame.offset, frame.offset + frame.size)]));
+
   return frame;
 };
 
@@ -138,6 +193,13 @@ var processID3v2 = function(ab) {
   var minorVersion = dv.getUint8(4);
   var id3_flags = dv.getUint8(5);
   var id3_size = readSyncSafe(dv, 6);
+  var id3_tag = {
+    major: majorVersion,
+    minor: minorVersion,
+    flags: id3_flags,
+    size: id3_size
+  };
+  window.id3_tag = id3_tag;
   window.id3_frames = [];
   var index = 10;
   while (id3_size) {
@@ -188,8 +250,64 @@ var processID3v2 = function(ab) {
   }
 };
 
+var saveChanges = function() {
+  var newTagSize = 0;
+  var dv = new DataView(reader.result);
+  for (var i = 0; i < id3_frames.length; i++) {
+    newTagSize += typeof id3_frames[i].isPadding == "undefined" ? (10 + id3_frames[i].size) : 0; //10 bytes plus payload for each frame
+  }
+  if (newTagSize <= id3_tag.size) {
+    //safe to write new tag and pad until beginning of mp3 data, this is the easy way.
+    var oldSize = id3_tag.size;
+    //write out tag header
+    //really it'd be more efficient to dv.setUint32(0, 1229206275) or dv.setUint32(0, 1229206276) to write out ID3 and major number
+    //all at once, but I suppose that's a little bit less obvious.
+    dv.setUint8(0, 'I'.charCodeAt(0));
+    dv.setUint8(1, 'D'.charCodeAt(0));
+    dv.setUint8(2, '3'.charCodeAt(0));
+    dv.setUint8(3, id3_tag.major);
+    dv.setUint8(4, id3_tag.minor);
+    dv.setUint8(5, id3_tag.flags);
+    dv.setUint32(6, getSyncSafe(oldSize));
+    var offset = 10;
+    for (var i = 0; i < id3_frames.length; i++) {
+      var frame = id3_frames[i];
+      if (typeof frame.isPadding != "undefined" && frame.isPadding) {
+        continue;
+      }
+      var framedv = new DataView(frame.arrayBuffer);
+      dv.setUint8(offset++, frame.ID.charCodeAt(0));
+      dv.setUint8(offset++, frame.ID.charCodeAt(1));
+      dv.setUint8(offset++, frame.ID.charCodeAt(2));
+      dv.setUint8(offset++, frame.ID.charCodeAt(3));
+      dv.setUint32(offset, frame.size);
+      offset += 4;
+      dv.setUint16(offset, 0); //both flags 0
+      offset += 2;
+      for(var x = 0; x < frame.size; x++) {
+        dv.setUint8(offset++, framedv.getUint8(x));
+      }
+    }
+    //wrote frame data out.  Now pad until we reach oldSize.
+    while (offset < oldSize) {
+      dv.setUint8(offset++, 0);
+    }
+    var newBlob = new Blob([dv.buffer], {type: "audio/mp3"});
+    var downloadLink = document.createElement("a");
+    downloadLink.download = "newfile.mp3";
+    downloadLink.href = URL.createObjectURL(newBlob);
+    downloadLink.click();
+    
+  } else {
+    alert("New tag will be bigger than old one, requiring rewriting the whole file.  Not implemented yet.");
+    return false;
+  }
+  
+};
+
 $(document).ready(function() {
   console.log("Ready");
+  $("#saveChanges").click(saveChanges);
   $("#theFile").change(function(e) {
     var theFile = $(this)[0].files[0];
     console.log(theFile);
@@ -203,3 +321,4 @@ $(document).ready(function() {
 </script>
 </body>
 </html>
+
