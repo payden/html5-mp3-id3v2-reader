@@ -240,7 +240,7 @@ var processID3v2 = function(ab, filename, filetype) {
           var matches = str.match(/\(\d+\)/g);
           if (matches && matches.length) {
             matches = str.match(/\d+/g);
-            $el.val(genres[parseInt(matches[0], 10)]);
+            $el.val(parseInt(matches[0], 10) < genres.length ? genres[parseInt(matches[0], 10)] : "Unknown");
           } else {
             $el.val(str);
           }
