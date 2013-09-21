@@ -189,7 +189,7 @@ var processFrame = function(majorVersion, dv, offset) {
   fr.onloadend = function(e) {
     frame.arrayBuffer = e.target.result;
   };
-  fr.readAsArrayBuffer(new Blob([dv.buffer.slice(frame.offset, frame.offset + frame.size)]));
+  fr.readAsArrayBuffer(new Blob([dv.buffer]).slice(frame.offset, frame.offset + frame.size));
 
   return frame;
 };
@@ -305,7 +305,7 @@ var writeHeaderAndFrames = function(dv, size) {
         dv.setUint8(offset++, framedv.getUint8(x));
       }
     }
-    while (offset < size) {
+    while (offset - 10 < size) {
       dv.setUint8(offset++, 0);
     }
     return offset;
@@ -349,7 +349,7 @@ var saveChanges = function() {
     //            copy mp3 data from old ArrayBuffer into new ArrayBuffer.
     var newTagSizeWithPadding = newTagSize + 4096;
     var mp3DataSize = dv.byteLength - (id3_tag.size + 10);
-    var ab = new ArrayBuffer(newTagSizeWithPadding + mp3DataSize);
+    var ab = new ArrayBuffer(newTagSizeWithPadding + mp3DataSize + 10);
     var newdv = new DataView(ab);
     var mp3DataOffset = writeHeaderAndFrames(newdv, newTagSizeWithPadding);
     var oldmp3DataOffset = id3_tag.size + 10;
