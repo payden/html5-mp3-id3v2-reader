@@ -16,7 +16,7 @@ input.text_frame { width: 500px; }
   <tr><td class="top"><strong>Title:</strong></td><td><input type="text" class="text_frame" data-id="TIT2"/></td></tr>
   <tr><td class="top"><strong>Album:</strong></td><td><input type="text" class="text_frame" data-id="TALB"/></td></tr>
   <tr><td class="top"><strong>Genre:</strong></td><td><input type="text" class="text_frame" data-id="TCON"/></td></tr>
-  <tr><td class="top"><strong>Picture:</strong></td><td><img id="APIC" style="max-width: 250px; display: none;"/></td></tr>
+  <tr><td class="top"><strong>Picture:</strong></td><td><div><input type="file" id="imageFile"/></div><img id="APIC" style="max-width: 250px; display: none;"/></td></tr>
 </table>
 
 <script src="jquery.min.js"></script>
@@ -33,6 +33,47 @@ var genres = [
               "Psychadelic", "Rave", "Showtunes", "Trailer", "Lo-Fi", "Tribal", "Acid Punk", "Acid Jazz", "Polka", "Retro",
               "Musical", "Rock & Roll", "Hard Rock"
               ];
+
+var createNewAPICFrame = function(imageBuffer, imageType) {
+  if (imageType != "image/jpeg" && imageType != "image/png") {
+    alert("Only jpeg and png are supported.");
+    return false;
+  }
+  var newFrameLength = imageBuffer.byteLength + imageType.length + 4; //4 bytes for null terminations and picture type
+  var newImageBuffer = new ArrayBuffer(newFrameLength);
+  var newdv = new DataView(newImageBuffer);
+  var olddv = new DataView(imageBuffer);
+  newdv.setUint8(0, 0); //set encoding ASCII
+  for(var i = 0; i < imageType.length; i++) {
+    newdv.setUint8(1+i, imageType.charCodeAt(i));
+  }
+  i++; //i now used as newdv index
+  newdv.setUint8(i++, 0); //terminate mime type string
+  newdv.setUint8(i++, 3); //set picture type to album cover.  Only option for now.
+  newdv.setUint8(i++, 0); //empty string for image description, maybe revisit later.
+  var remaining = imageBuffer.byteLength;
+  var oldIndex = 0;
+  //write 4 byte chunks.
+  while (parseInt(remaining / 4, 10) > 0) {
+    newdv.setUint32(i, olddv.getUint32(oldIndex));
+    oldIndex += 4;
+    i += 4; //new index
+    remaining -= 4;
+  }
+  //write remainder one byte at a time.
+  for (var x = 0; x < remaining % 4; x++) {
+    newdv.setUint8(i++, olddv.getUint8(oldIndex++));
+  }
+  var frame = {
+    offset: -1,
+    ID: "APIC",
+    size: newFrameLength,
+    flags: [0, 0],
+    arrayBuffer: newImageBuffer
+  };
+
+  return frame;
+};
 
 var readASCIIString = function(dv, offset, maxLength) {
   var index = offset;
@@ -393,18 +434,45 @@ $(document).ready(function() {
     $("#saveChanges").show();
   });
   $("#saveChanges").click(saveChanges);
+  $("#imageFile").change(function(e) {
+    if ($("#theFile").length == 0 || typeof id3_frames == "undefined") {
+      return false;
+    }
+    var imageFile = e.target.files[0];
+    var fr = new FileReader();
+    fr.onloadend = function(evt) {
+      var imageBlob = new Blob([evt.target.result], {type: imageFile.type});
+      $("#APIC").attr('src', URL.createObjectURL(imageBlob));
+      $("#APIC").show();
+      var frame = createNewAPICFrame(evt.target.result, imageFile.type);
+      if (!frame) {
+        return false;
+      }
+      var existing = false;
+      for (var i = 0; i < id3_frames.length; i++) {
+        if (id3_frames[i].ID == "APIC") {
+          existing = true;
+          id3_frames[i] = frame;
+          break;
+        }
+      }
+      if (!existing) {
+        id3_frames.push(frame);
+      }
+      $("#saveChanges").show();
+    };
+    fr.readAsArrayBuffer(imageFile);
+    
+  });
   $("#theFile").change(function(e) {
     var theFile = $(this)[0].files[0];
     console.log(theFile);
     reader = new FileReader();
-    reader.readAsArrayBuffer(theFile);
-
     reader.onloadend = function() {
-      console.log("Calling processID3v2");
       window.fileBlob = new Blob([reader.result], {type: theFile.type});
       processID3v2(reader.result, theFile.name, theFile.type);
-      console.log("Done");
     };
+    reader.readAsArrayBuffer(theFile);
   });
 });
 </script>
