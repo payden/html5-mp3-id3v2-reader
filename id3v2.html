@@ -21,6 +21,11 @@ input.text_frame { width: 500px; }
 
 <script src="jquery.min.js"></script>
 <script type="text/javascript">
+if (typeof console == "undefined") { //IE needs to either implement console or ignore it.
+  window.console = {
+    log: function() {}
+  };
+}
 var reader = null;
 var genres = [
               "Blues", "Classic Rock", "Country", "Dance", "Disco", "Funk", "Grunge", "Hip-Hop", "Jazz", "Metal", "New Age",
