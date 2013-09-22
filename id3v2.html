@@ -189,7 +189,7 @@ var processFrame = function(majorVersion, dv, offset) {
   fr.onloadend = function(e) {
     frame.arrayBuffer = e.target.result;
   };
-  fr.readAsArrayBuffer(new Blob([dv.buffer]).slice(frame.offset, frame.offset + frame.size));
+  fr.readAsArrayBuffer(fileBlob.slice(frame.offset, frame.offset + frame.size));
 
   return frame;
 };
@@ -398,8 +398,12 @@ $(document).ready(function() {
     console.log(theFile);
     reader = new FileReader();
     reader.readAsArrayBuffer(theFile);
+
     reader.onloadend = function() {
+      console.log("Calling processID3v2");
+      window.fileBlob = new Blob([reader.result], {type: theFile.type});
       processID3v2(reader.result, theFile.name, theFile.type);
+      console.log("Done");
     };
   });
 });
