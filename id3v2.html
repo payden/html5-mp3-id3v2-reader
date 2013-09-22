@@ -470,7 +470,7 @@ $(document).ready(function() {
     
   });
   $("#theFile").change(function(e) {
-    var theFile = $(this)[0].files[0];
+    var theFile = e.target.files[0];
     console.log(theFile);
     reader = new FileReader();
     reader.onloadend = function() {
